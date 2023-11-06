@@ -1,0 +1,153 @@
+/***************************************************************************
+*Author: Minal Patil
+*Description: This class is responsible for making an API callout to store XML files in an AWS S3 bucket.
+***************************************************************************/
+public class AwsUtility { 
+    //Authentication parameter 
+    public string awskey; 
+    public string awsSecret; 
+    public string bucketName; 
+    public string methodName; 
+    public string hostName;
+    
+    
+    //intitalize auth parameters in constructor
+    public AwsUtility(string key, string sec, string bkt, string method, string host) {
+        awsKey = key;
+        awsSecret = sec;
+        bucketName = bkt;
+        methodName = method; 
+        hostName=host;
+    }
+    
+    public string contentType(string fileType) {
+        switch on fileType.toLowerCase(){
+            when 'csv'{
+                return 'application/vnd.ms-excel';
+            }
+            when 'docx'{
+                return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            }
+            when 'wav'{
+                return 'audio/wav';
+            }
+            when 'png'{
+                return 'image/png';
+            }
+            when 'xml'{
+                return 'application/xml';
+            }
+            when else{
+                return 'image/jpeg';
+            }
+        }
+    }
+    
+    public string CreateAuthHeader(String contentType,String filename, String formattedDateString,string fileExtension){
+        string auth;
+        String orgId = UserInfo.getOrganizationId();
+		String folderName = 'VeraAmpImpact-' + orgId; // Folder naming format
+        String newFilename = fileName.replaceAll(' ', '_');
+        String stringToSign = this.methodName+'\n\n'+contentType+'\n'+formattedDateString+'\n/'+this.bucketName+'/' + folderName + '/' +newFilename.toLowerCase()+ '.'+fileExtension.toLowerCase();
+        Blob mac = Crypto.generateMac('HMACSHA1', blob.valueof(stringToSign),blob.valueof(this.awsSecret));
+        String sig = EncodingUtil.base64Encode(mac);
+        auth = 'AWS' + ' ' + this.awsKey + ':' + sig;
+        return auth;
+    }
+    
+   public void UploadDocuments(string recordId) {
+    if (string.isBlank(this.awsSecret) || string.isBlank(this.awsKey) || string.isBlank(this.bucketName) || string.isBlank(this.hostName)) {
+        throw new BaseException('Set AWS credentials');
+    }
+    
+    List<ContentDocumentLink> contentLinkList = [SELECT ContentDocumentId, LinkedEntityId FROM ContentDocumentLink WHERE LinkedEntityId = :recordId];
+    Set<Id> conDocIdSet = new Set<Id>();
+    Map<String, String> fileUrlMap = new Map<String, String>();
+
+    for (ContentDocumentLink link : contentLinkList) {
+        conDocIdSet.add(link.ContentDocumentId);
+    }
+
+    String excludeCondition = '%xlsx';
+List<ContentVersion> cVersions = [
+        SELECT VersionData, Title, ContentDocumentId, fileExtension
+        FROM ContentVersion
+        WHERE ContentDocumentId IN :conDocIdSet
+        AND (NOT fileExtension LIKE :excludeCondition)
+        AND IsLatest = TRUE
+    ];
+
+    System.debug('cVersions>> ' + cVersions);
+
+   // Create a list to hold data for all attachments
+        List<Map<String, String>> attachmentDataList = new List<Map<String, String>>();
+
+        for (ContentVersion attach : cVersions) {
+            Map<String, String> attachmentData = new Map<String, String>();
+            attachmentData.put('VersionData', Encodingutil.base64Encode(attach.VersionData));
+            attachmentData.put('Title', attach.Title.replaceAll(' ', '_'));
+            attachmentData.put('FileExtension', attach.fileExtension);
+
+            attachmentDataList.add(attachmentData);
+        }
+       
+        // Create a list to hold data for all files to be uploaded
+        List<Map<String, Object>> fileDataList = new List<Map<String, Object>>();
+
+        for (Map<String, String> attachmentData : attachmentDataList) {
+            Map<String, Object> fileData = new Map<String, Object>();
+            String attachmentBody = attachmentData.get('VersionData');
+            Blob pdfBlob = EncodingUtil.base64Decode(attachmentBody);
+            String fileName = attachmentData.get('Title');
+            String contentType = contentType(attachmentData.get('FileExtension'));
+            String orgId = UserInfo.getOrganizationId();
+            String folderName = 'VeraAmpImpact-' + orgId; // Folder naming format
+            DateTime uploadTimestamp = DateTime.now();
+            String fileUrl = 'https://' + this.bucketName + '.' + this.hostName + '/' + folderName + '/' + fileName.toLowerCase() + '.' + attachmentData.get('FileExtension').toLowerCase();
+            fileData.put('request', createRequest(contentType, fileName, pdfBlob, fileUrl));
+            fileData.put('attachmentData', attachmentData);
+            fileDataList.add(fileData);
+        }
+       
+       // Make a single callout to upload all files
+        List<String> successfulFileUrls = new List<String>();
+
+        for (Map<String, Object> fileData : fileDataList) {
+            Map<String, String> attachmentData = (Map<String, String>) fileData.get('attachmentData');
+            HttpResponse res = makeSingleCallout((HttpRequest) fileData.get('request'));
+
+            if (res.getStatusCode() == 200 || res.getStatusCode() == 201) {
+                fileUrlMap.put(fileName, fileUrl);
+
+                
+            } else {
+                System.debug('Callout failed with status code: ' + res.getStatusCode());
+                System.debug('Response Body: ' + res.getBody());
+            }
+        }
+
+   
+       // Update the records outside the for loop
+  for (ContentVersion attach : cVersions) {
+        String fileName1= attach.Title.replaceAll(' ', '_');
+        String fileUrl1= fileUrlMap.get(fileName1);
+
+        if (fileUrl1!= null) {
+            Account accToUpdate = new Account(Id = recordId);
+            accToUpdate.XML_uploaded_in_AWS__c = true; 
+
+            if (!fileUrl1.contains('activity')) {
+                accToUpdate.ampi__IATI_Organization_XML_Link__c = fileUrl1;
+            } else {
+                accToUpdate.ampi__IATI_Activity_XML_Link__c = fileUrl1;
+            }
+
+            accountsToUpdate.add(accToUpdate);
+        }
+    }
+
+    if (!accountsToUpdate.isEmpty()) {
+        update accountsToUpdate;
+    } 
+    }
+    }

@@ -1,0 +1,6 @@
+<apex:page standardController="Account">
+    <apex:iframe height="1000" src="https://www.guidestar.org/search?q={!Account.Name}" 
+        rendered="{!if(isblank(Account.Guidestar_Link__c),'true','false')}"/>
+    <apex:iframe height="1000" src="{!Account.Guidestar_Link__c}?preview=1"
+        rendered="{!if(isblank(Account.Guidestar_Link__c),'false','true')}"/>
+</apex:page>

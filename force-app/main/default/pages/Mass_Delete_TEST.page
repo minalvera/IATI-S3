@@ -1,0 +1,6 @@
+<apex:page standardController="Task">
+
+      <h1>Congratulations</h1>
+      <h2>YOU DELETED IT! Yay!</h2>
+
+</apex:page>
